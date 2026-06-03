@@ -113,6 +113,46 @@ def ask_filename(ext: str) -> str:
             return name.removesuffix(ext)
         print("⚠️  文件名不能为空。")
 
+# ── 去除 AI 寒暄开场白 ──
+_HR_RE = re.compile(r'^[-*_]{3,}\s*$')                 # 水平分隔线 --- / *** / ___
+# 正文结构特征（标题/列表/表格/代码/引用/块级公式），出现即认定不是寒暄
+_STRUCT_RE = re.compile(r'^\s*(#{1,6}\s|[-*+]\s|\d+\.\s|\||```|>|\$\$)')
+_PREAMBLE_MAX_CHARS = 150                              # 分隔线前内容超过此长度则视为正文
+
+def maybe_strip_ai_preamble(md_text: str) -> str:
+    """
+    检测并（询问后）去除 AI 在首条水平分隔线前的寒暄开场白。
+    判定：首条 ---/***/___ 之前的内容较短、且不含正文结构 → 疑似寒暄。
+    """
+    lines = md_text.splitlines()
+    hr_idx = next((idx for idx, ln in enumerate(lines)
+                   if _HR_RE.match(ln.strip())), None)
+    if hr_idx is None:
+        return md_text                                 # 没有分隔线，不处理
+
+    head = lines[:hr_idx]
+    preamble = "\n".join(head).strip()
+    if not preamble:
+        return md_text                                 # 分隔线前无内容
+    if len(preamble) > _PREAMBLE_MAX_CHARS or any(_STRUCT_RE.match(l) for l in head):
+        return md_text                                 # 内容多或含正文结构 → 当作正文
+
+    print("\n🤖 检测到首条分隔线前疑似 AI 寒暄开场白：")
+    print("   " + "─" * 52)
+    for l in preamble.splitlines():
+        print(f"   │ {l}")
+    print("   " + "─" * 52)
+    if _ask("是否删除这段开场白？(y=删除 / n=保留，默认 y): ",
+            {"y": "y", "Y": "y", "n": "n", "N": "n"}, "y") == "n":
+        print("   ↩️  已保留开场白。")
+        return md_text
+
+    rest = lines[hr_idx + 1:]                           # 删掉开场白与该分隔线
+    while rest and not rest[0].strip():                 # 顺带去掉其后紧邻空行
+        rest.pop(0)
+    print("   ✅ 已删除开场白。")
+    return "\n".join(rest)
+
 
 # ─────────────────────────────────────────────────
 # § 3  Markdown 解析（保护 LaTeX 避免被破坏）
@@ -1059,6 +1099,7 @@ def main() -> None:
     print("=" * 55)
 
     md_text  = read_clipboard()
+    md_text  = maybe_strip_ai_preamble(md_text)
     fmt      = ask_format()
     theme    = ask_pdf_theme() if fmt == "pdf" else "pingfang"
     ext      = ".pdf" if fmt == "pdf" else ".docx"
